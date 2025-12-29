@@ -1,0 +1,563 @@
+import React, { useState, useMemo } from 'react';
+import { BarChart, Bar, LineChart, Line, ScatterChart, Scatter, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { TrendingUp, DollarSign, Package, Search, ChevronDown, ChevronUp, Filter, SortAsc, Eye, Calculator, Image as ImageIcon, Download } from 'lucide-react';
+
+const CompleteCatalogAnalysis = () => {
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('all');
+  const [selectedDept, setSelectedDept] = useState('all');
+  const [sortBy, setSortBy] = useState('marge_grossiste_pourcent');
+  const [sortOrder, setSortOrder] = useState('desc');
+  const [expandedProduct, setExpandedProduct] = useState(null);
+  const [viewMode, setViewMode] = useState('all');
+  const [currencyView, setCurrencyView] = useState('ILS');
+  const [currentPage, setCurrentPage] = useState(1);
+  const productsPerPage = 50;
+
+  const USD_TO_ILS = 3.03;
+
+  // CATALOGUE COMPLET - 292 PRODUITS RÉELS DE VOTRE EXCEL
+  const catalogData = ${require('fs').readFileSync('/home/claude/catalog_complete_light.json', 'utf-8')};
+
+  // Statistiques globales
+  const stats = useMemo(() => {
+    const validProducts = catalogData.filter(p => p.prix_vente_grossiste_ht);
+    return {
+      totalProducts: catalogData.length,
+      avgCostILS: (catalogData.reduce((sum, p) => sum + (p.prix_cout_ils_avec_transport || 0), 0) / validProducts.length).toFixed(2),
+      avgCostUSD: (catalogData.reduce((sum, p) => sum + (p.prix_cout_usd_avec_transport || 0), 0) / validProducts.length).toFixed(2),
+      avgWholesalePrice: (catalogData.reduce((sum, p) => sum + (p.prix_vente_grossiste_ht || 0), 0) / validProducts.length).toFixed(2),
+      avgConsumerPrice: (catalogData.reduce((sum, p) => sum + (p.prix_consommateur || 0), 0) / validProducts.length).toFixed(2),
+      avgMarginPercent: (catalogData.reduce((sum, p) => sum + (p.marge_grossiste_pourcent || 0), 0) / validProducts.length).toFixed(2),
+      totalMarginPotential: catalogData.reduce((sum, p) => sum + (p.marge_grossiste_ils || 0), 0).toFixed(2),
+      productsWithImages: catalogData.filter(p => p.image).length
+    };
+  }, []);
+
+  // Filtrer et trier les produits
+  const filteredProducts = useMemo(() => {
+    let products = [...catalogData];
+    
+    if (searchTerm) {
+      products = products.filter(p => 
+        p.modele?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        p.description_anglais?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        p.description_hebreu?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        p.couleur?.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    }
+    
+    if (selectedCategory !== 'all') {
+      products = products.filter(p => p.type_article === selectedCategory);
+    }
+    
+    if (selectedDept !== 'all') {
+      products = products.filter(p => p.departement === selectedDept);
+    }
+
+    if (viewMode === 'profitable') {
+      products = products.filter(p => p.marge_grossiste_pourcent >= 55);
+    } else if (viewMode === 'low-margin') {
+      products = products.filter(p => p.marge_grossiste_pourcent < 55);
+    }
+    
+    products.sort((a, b) => {
+      const aVal = a[sortBy] || 0;
+      const bVal = b[sortBy] || 0;
+      return sortOrder === 'desc' ? bVal - aVal : aVal - bVal;
+    });
+    
+    return products;
+  }, [searchTerm, selectedCategory, selectedDept, sortBy, sortOrder, viewMode]);
+
+  // Pagination
+  const paginatedProducts = useMemo(() => {
+    const startIndex = (currentPage - 1) * productsPerPage;
+    const endIndex = startIndex + productsPerPage;
+    return filteredProducts.slice(startIndex, endIndex);
+  }, [filteredProducts, currentPage]);
+
+  const totalPages = Math.ceil(filteredProducts.length / productsPerPage);
+
+  // Distribution des marges
+  const marginDistribution = useMemo(() => {
+    const ranges = [
+      { name: '< 50%', min: 0, max: 50, count: 0, total: 0 },
+      { name: '50-55%', min: 50, max: 55, count: 0, total: 0 },
+      { name: '55-60%', min: 55, max: 60, count: 0, total: 0 },
+      { name: '> 60%', min: 60, max: 100, count: 0, total: 0 }
+    ];
+    
+    catalogData.forEach(p => {
+      if (p.marge_grossiste_pourcent) {
+        const range = ranges.find(r => p.marge_grossiste_pourcent >= r.min && p.marge_grossiste_pourcent < r.max) || ranges[ranges.length - 1];
+        range.count++;
+        range.total += p.marge_grossiste_ils;
+      }
+    });
+    
+    return ranges;
+  }, []);
+
+  // Analyse par département
+  const deptAnalysis = useMemo(() => {
+    const deptMap = new Map();
+    catalogData.forEach(p => {
+      const dept = p.departement || 'Non classé';
+      if (!deptMap.has(dept)) {
+        deptMap.set(dept, {
+          name: dept,
+          count: 0,
+          avgCost: 0,
+          avgPrice: 0,
+          avgMargin: 0,
+          totalMargin: 0
+        });
+      }
+      const d = deptMap.get(dept);
+      d.count++;
+      d.avgCost += p.prix_cout_ils_avec_transport || 0;
+      d.avgPrice += p.prix_vente_grossiste_ht || 0;
+      d.avgMargin += p.marge_grossiste_pourcent || 0;
+      d.totalMargin += p.marge_grossiste_ils || 0;
+    });
+    
+    return Array.from(deptMap.values()).map(d => ({
+      ...d,
+      avgCost: (d.avgCost / d.count).toFixed(2),
+      avgPrice: (d.avgPrice / d.count).toFixed(2),
+      avgMargin: (d.avgMargin / d.count).toFixed(2)
+    })).sort((a, b) => b.totalMargin - a.totalMargin);
+  }, []);
+
+  // Analyse par catégorie
+  const categoryAnalysis = useMemo(() => {
+    const catMap = new Map();
+    catalogData.forEach(p => {
+      const cat = p.type_article || 'Non classé';
+      if (!catMap.has(cat)) {
+        catMap.set(cat, { name: cat, count: 0, totalMargin: 0 });
+      }
+      const c = catMap.get(cat);
+      c.count++;
+      c.totalMargin += p.marge_grossiste_ils || 0;
+    });
+    return Array.from(catMap.values());
+  }, []);
+
+  const COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4'];
+
+  const exportToCSV = () => {
+    const headers = ['Modèle', 'Description', 'Couleur', 'Département', 'Coût USD', 'Coût ILS', 'Prix Vente HT', 'Prix Club', 'Prix Final', 'Marge ILS', 'Marge %'];
+    const rows = filteredProducts.map(p => [
+      p.modele,
+      p.description_anglais,
+      p.couleur,
+      p.departement,
+      p.prix_cout_usd_avec_transport,
+      p.prix_cout_ils_avec_transport,
+      p.prix_vente_grossiste_ht,
+      p.prix_club,
+      p.prix_consommateur,
+      p.marge_grossiste_ils,
+      p.marge_grossiste_pourcent
+    ]);
+    
+    const csv = [headers, ...rows].map(row => row.join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'catalogue_analyse.csv';
+    a.click();
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900 p-6">
+      <div className="max-w-7xl mx-auto">
+        {/* En-tête */}
+        <div className="mb-8 bg-gradient-to-r from-blue-600 to-purple-600 rounded-2xl shadow-2xl p-8 text-white">
+          <div className="flex justify-between items-start">
+            <div>
+              <h1 className="text-4xl font-bold mb-2">💎 Catalogue Complet - Collection Été 2026</h1>
+              <p className="text-blue-100">292 produits • Prix USD/ILS • Transport +8% inclus • Toutes les marges calculées</p>
+              <p className="text-sm text-blue-200 mt-2">✅ Données 100% réelles extraites de votre Excel</p>
+            </div>
+            <div className="bg-white/20 rounded-lg p-4 backdrop-blur">
+              <p className="text-sm mb-1">Taux de change</p>
+              <p className="text-2xl font-bold">1 USD = {USD_TO_ILS.toFixed(2)} ILS</p>
+              <button
+                onClick={() => setCurrencyView(currencyView === 'ILS' ? 'USD' : 'ILS')}
+                className="mt-2 text-sm bg-white/30 hover:bg-white/40 px-3 py-1 rounded transition"
+              >
+                Voir en {currencyView === 'ILS' ? 'USD' : 'ILS'}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* KPIs Principaux */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+          <div className="bg-white rounded-xl shadow-lg p-6 border-l-4 border-blue-500">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm text-slate-600">Produits au Catalogue</p>
+              <Package className="w-8 h-8 text-blue-500 opacity-30" />
+            </div>
+            <p className="text-3xl font-bold text-slate-900">{stats.totalProducts}</p>
+            <p className="text-xs text-slate-500 mt-1">Collection complète</p>
+          </div>
+          
+          <div className="bg-white rounded-xl shadow-lg p-6 border-l-4 border-red-500">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm text-slate-600">Coût Moyen d'Achat</p>
+              <DollarSign className="w-8 h-8 text-red-500 opacity-30" />
+            </div>
+            <p className="text-3xl font-bold text-slate-900">
+              {currencyView === 'ILS' ? `${stats.avgCostILS} ₪` : `$${stats.avgCostUSD}`}
+            </p>
+            <p className="text-xs text-slate-500 mt-1">Transport inclus (+8%)</p>
+          </div>
+          
+          <div className="bg-white rounded-xl shadow-lg p-6 border-l-4 border-green-500">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm text-slate-600">Prix Vente Grossiste</p>
+              <TrendingUp className="w-8 h-8 text-green-500 opacity-30" />
+            </div>
+            <p className="text-3xl font-bold text-slate-900">{stats.avgWholesalePrice} ₪</p>
+            <p className="text-xs text-slate-500 mt-1">Hors TVA</p>
+          </div>
+          
+          <div className="bg-white rounded-xl shadow-lg p-6 border-l-4 border-purple-500">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm text-slate-600">Marge Moyenne</p>
+              <Calculator className="w-8 h-8 text-purple-500 opacity-30" />
+            </div>
+            <p className="text-3xl font-bold text-slate-900">{stats.avgMarginPercent}%</p>
+            <p className="text-xs text-slate-500 mt-1">Potentiel: {parseFloat(stats.totalMarginPotential).toLocaleString('fr-FR')} ₪</p>
+          </div>
+        </div>
+
+        {/* Graphiques d'analyse */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+          <div className="bg-white rounded-xl shadow-lg p-6">
+            <h3 className="text-xl font-bold text-slate-900 mb-4">📊 Distribution des Marges</h3>
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart data={marginDistribution}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                <XAxis dataKey="name" stroke="#64748b" />
+                <YAxis stroke="#64748b" />
+                <Tooltip 
+                  contentStyle={{ backgroundColor: '#1e293b', border: 'none', borderRadius: '8px', color: '#fff' }}
+                  formatter={(value, name) => [name === 'count' ? `${value} produits` : `${value.toFixed(2)} ₪`, name === 'count' ? 'Nombre' : 'Marge totale']}
+                />
+                <Legend />
+                <Bar dataKey="count" fill="#3b82f6" name="Produits" />
+                <Bar dataKey="total" fill="#10b981" name="Marge (₪)" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          
+          <div className="bg-white rounded-xl shadow-lg p-6">
+            <h3 className="text-xl font-bold text-slate-900 mb-4">🏢 Performance par Département</h3>
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart data={deptAnalysis} layout="vertical">
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                <XAxis type="number" stroke="#64748b" />
+                <YAxis dataKey="name" type="category" stroke="#64748b" width={100} />
+                <Tooltip 
+                  contentStyle={{ backgroundColor: '#1e293b', border: 'none', borderRadius: '8px', color: '#fff' }}
+                  formatter={(value) => `${parseFloat(value).toFixed(2)}%`}
+                />
+                <Bar dataKey="avgMargin" fill="#8b5cf6" name="Marge moyenne %" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        {/* Répartition par catégorie */}
+        <div className="bg-white rounded-xl shadow-lg p-6 mb-8">
+          <h3 className="text-xl font-bold text-slate-900 mb-4">🎯 Répartition par Type de Produit</h3>
+          <ResponsiveContainer width="100%" height={300}>
+            <PieChart>
+              <Pie
+                data={categoryAnalysis}
+                cx="50%"
+                cy="50%"
+                labelLine={false}
+                label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                outerRadius={100}
+                fill="#8884d8"
+                dataKey="count"
+              >
+                {categoryAnalysis.map((entry, index) => (
+                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                ))}
+              </Pie>
+              <Tooltip />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Filtres avancés */}
+        <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Rechercher..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            
+            <select
+              value={selectedCategory}
+              onChange={(e) => setSelectedCategory(e.target.value)}
+              className="px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="all">Tous types</option>
+              {Array.from(new Set(catalogData.map(p => p.type_article).filter(Boolean))).map(t => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+            
+            <select
+              value={selectedDept}
+              onChange={(e) => setSelectedDept(e.target.value)}
+              className="px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="all">Tous départements</option>
+              {Array.from(new Set(catalogData.map(p => p.departement).filter(Boolean))).map(d => (
+                <option key={d} value={d}>{d}</option>
+              ))}
+            </select>
+
+            <select
+              value={viewMode}
+              onChange={(e) => setViewMode(e.target.value)}
+              className="px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="all">Tous les produits</option>
+              <option value="profitable">Haute rentabilité (&gt;55%)</option>
+              <option value="low-margin">Faible marge (&lt;55%)</option>
+            </select>
+            
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              className="px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="marge_grossiste_pourcent">Marge %</option>
+              <option value="marge_grossiste_ils">Marge ₪</option>
+              <option value="prix_vente_grossiste_ht">Prix vente</option>
+              <option value="prix_cout_ils_avec_transport">Coût</option>
+            </select>
+          </div>
+          
+          <div className="mt-4 flex justify-between items-center">
+            <p className="text-sm text-slate-600">
+              <strong>{filteredProducts.length}</strong> produits affichés (page {currentPage}/{totalPages})
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={exportToCSV}
+                className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition text-sm"
+              >
+                <Download className="w-4 h-4" />
+                Exporter CSV
+              </button>
+              <button
+                onClick={() => setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc')}
+                className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 rounded-lg transition text-sm"
+              >
+                <SortAsc className="w-4 h-4" />
+                {sortOrder === 'desc' ? 'Décroissant' : 'Croissant'}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Tableau détaillé */}
+        <div className="bg-white rounded-xl shadow-lg overflow-hidden mb-6">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-800 text-white">
+                <tr>
+                  <th className="text-left py-3 px-3 font-semibold">Modèle</th>
+                  <th className="text-left py-3 px-3 font-semibold">Description</th>
+                  <th className="text-left py-3 px-3 font-semibold">Couleur</th>
+                  <th className="text-left py-3 px-3 font-semibold">Dépt</th>
+                  <th className="text-right py-3 px-3 font-semibold">Coût USD</th>
+                  <th className="text-right py-3 px-3 font-semibold">Coût ILS</th>
+                  <th className="text-right py-3 px-3 font-semibold">Vente HT</th>
+                  <th className="text-right py-3 px-3 font-semibold">Club</th>
+                  <th className="text-right py-3 px-3 font-semibold">Final</th>
+                  <th className="text-right py-3 px-3 font-semibold">Marge ₪</th>
+                  <th className="text-right py-3 px-3 font-semibold">Marge %</th>
+                  <th className="text-center py-3 px-3 font-semibold">Détails</th>
+                </tr>
+              </thead>
+              <tbody>
+                {paginatedProducts.map((product, index) => (
+                  <React.Fragment key={product.modele}>
+                    <tr 
+                      className={`border-b border-slate-200 hover:bg-blue-50 transition cursor-pointer ${
+                        product.marge_grossiste_pourcent > 55 ? 'bg-green-50' : 
+                        product.marge_grossiste_pourcent < 50 ? 'bg-red-50' : ''
+                      }`}
+                      onClick={() => setExpandedProduct(expandedProduct === product.modele ? null : product.modele)}
+                    >
+                      <td className="py-2 px-3 font-mono text-blue-600 font-bold">{product.modele}</td>
+                      <td className="py-2 px-3 text-slate-900 max-w-xs truncate">{product.description_anglais || product.description_hebreu}</td>
+                      <td className="py-2 px-3">
+                        <span className="inline-block px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs">
+                          {product.couleur}
+                        </span>
+                      </td>
+                      <td className="py-2 px-3 text-slate-600 text-xs">{product.departement}</td>
+                      <td className="py-2 px-3 text-right font-semibold text-red-600">
+                        ${product.prix_cout_usd_avec_transport?.toFixed(2) || '-'}
+                      </td>
+                      <td className="py-2 px-3 text-right font-semibold text-red-600">
+                        {product.prix_cout_ils_avec_transport?.toFixed(2) || '-'} ₪
+                      </td>
+                      <td className="py-2 px-3 text-right font-bold text-blue-600">
+                        {product.prix_vente_grossiste_ht || '-'} ₪
+                      </td>
+                      <td className="py-2 px-3 text-right text-slate-600">
+                        {product.prix_club || '-'} ₪
+                      </td>
+                      <td className="py-2 px-3 text-right font-semibold text-slate-900">
+                        {product.prix_consommateur || '-'} ₪
+                      </td>
+                      <td className="py-2 px-3 text-right font-bold text-green-600">
+                        {product.marge_grossiste_ils?.toFixed(2) || '-'} ₪
+                      </td>
+                      <td className="py-2 px-3 text-right">
+                        <span className={`inline-block px-2 py-0.5 rounded-full font-bold text-xs ${
+                          product.marge_grossiste_pourcent > 55 ? 'bg-green-100 text-green-700' :
+                          product.marge_grossiste_pourcent > 50 ? 'bg-amber-100 text-amber-700' :
+                          'bg-red-100 text-red-700'
+                        }`}>
+                          {product.marge_grossiste_pourcent?.toFixed(1) || '-'}%
+                        </span>
+                      </td>
+                      <td className="py-2 px-3 text-center">
+                        <button className="text-blue-600 hover:text-blue-800">
+                          {expandedProduct === product.modele ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                        </button>
+                      </td>
+                    </tr>
+                    {expandedProduct === product.modele && (
+                      <tr className="bg-slate-50 border-b-2 border-slate-300">
+                        <td colSpan="12" className="py-4 px-6">
+                          <div className="grid grid-cols-2 gap-6">
+                            <div>
+                              <h4 className="font-bold text-slate-900 mb-2">📋 Détails Produit</h4>
+                              <p className="text-sm text-slate-600 mb-1">
+                                <strong>Type:</strong> {product.type_article} - {product.categorie}
+                              </p>
+                              <p className="text-sm text-slate-600 mb-1">
+                                <strong>Sous-catégorie:</strong> {product.sous_departement}
+                              </p>
+                              <p className="text-sm text-slate-600">
+                                <strong>Description:</strong> {product.description_detaillee || product.description_hebreu}
+                              </p>
+                            </div>
+                            <div>
+                              <h4 className="font-bold text-slate-900 mb-2">👕 Tailles Disponibles</h4>
+                              <div className="flex flex-wrap gap-2 mb-3">
+                                {Object.entries(product.tailles_disponibles || {}).map(([taille, dispo]) => (
+                                  dispo && (
+                                    <span key={taille} className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs font-semibold">
+                                      {taille}
+                                    </span>
+                                  )
+                                ))}
+                              </div>
+                              <div className="p-3 bg-purple-50 rounded-lg">
+                                <p className="text-sm font-semibold text-purple-900">💰 Analyse Complète</p>
+                                <p className="text-xs text-purple-700 mt-1">
+                                  Marge consommateur: <strong>{product.marge_totale_pourcent?.toFixed(1)}%</strong> 
+                                  ({product.marge_totale_ils?.toFixed(2)} ₪)
+                                </p>
+                                <p className="text-xs text-purple-700">
+                                  Transport inclus: <strong>+8%</strong> du coût de base
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Pagination */}
+        <div className="flex justify-center gap-2 mb-8">
+          <button
+            onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+            disabled={currentPage === 1}
+            className="px-4 py-2 bg-white rounded-lg shadow hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Précédent
+          </button>
+          <span className="px-4 py-2 bg-white rounded-lg shadow">
+            Page {currentPage} sur {totalPages}
+          </span>
+          <button
+            onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
+            disabled={currentPage === totalPages}
+            className="px-4 py-2 bg-white rounded-lg shadow hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Suivant
+          </button>
+        </div>
+
+        {/* Footer avec insights */}
+        <div className="bg-gradient-to-r from-purple-600 to-pink-600 rounded-xl shadow-lg p-6 text-white">
+          <h3 className="text-xl font-bold mb-4">💡 Insights Clés du Catalogue Complet</h3>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-sm">
+            <div>
+              <p className="font-semibold mb-1">🎯 Meilleur Département</p>
+              <p className="opacity-90">{deptAnalysis[0]?.name} - Marge {deptAnalysis[0]?.avgMargin}%</p>
+            </div>
+            <div>
+              <p className="font-semibold mb-1">📊 Distribution Marges</p>
+              <p className="opacity-90">
+                {marginDistribution.find(m => m.name === '> 60%')?.count || 0} produits à marge élevée
+              </p>
+            </div>
+            <div>
+              <p className="font-semibold mb-1">💵 Potentiel Total</p>
+              <p className="opacity-90">{parseFloat(stats.totalMarginPotential).toLocaleString('fr-FR')} ₪</p>
+            </div>
+            <div>
+              <p className="font-semibold mb-1">🏭 Collection</p>
+              <p className="opacity-90">{stats.totalProducts} produits • {categoryAnalysis.length} catégories</p>
+            </div>
+          </div>
+          
+          <div className="mt-4 p-4 bg-white/20 rounded-lg backdrop-blur">
+            <p className="text-sm font-semibold mb-2">📌 Note sur les données:</p>
+            <ul className="text-xs space-y-1 opacity-90">
+              <li>✅ Prix d'achat USD/ILS avec transport (+8%) inclus</li>
+              <li>✅ Tous les prix de vente (Grossiste HT, Club, Consommateur)</li>
+              <li>✅ Marges calculées automatiquement en ₪ et %</li>
+              <li>✅ Taux de change: 1 USD = {USD_TO_ILS.toFixed(2)} ILS</li>
+              <li>✅ 292 produits • 290 avec images disponibles dans l'Excel</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default CompleteCatalogAnalysis;
